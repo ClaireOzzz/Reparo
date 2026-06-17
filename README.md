@@ -6,3 +6,4 @@ To use:
 - The Reparo UI should appear after you load the plugin in
 
 More info:
+https://claireozzz.github.io/projects/reparo.html
