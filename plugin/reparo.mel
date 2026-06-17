@@ -1,0 +1,184 @@
+
+// reparo.mel
+
+global proc reparoDoScatter()
+{
+    int   $sf = `intFieldGrp   -q -value1 simFramesField`;
+    float $o  = `floatFieldGrp -q -value1 offsetField`;
+    float $vx = `floatFieldGrp -q -value1 vxField`;
+    float $vy = `floatFieldGrp -q -value1 vyField`;
+    float $vz = `floatFieldGrp -q -value1 vzField`;
+    float $g  = `floatFieldGrp -q -value1 gravField`;
+    reparoScatter -vx $vx -vy $vy -vz $vz -g $g -sf $sf -o $o;
+}
+
+global proc reparoDoRepair()
+{
+    int   $f  = `intFieldGrp   -q -value1 framesField`;
+    float $ra = `floatFieldGrp -q -value1 angleField`;
+    float $ah = `floatFieldGrp -q -value1 arcField`;
+    reparoRepair -f $f -ra $ra -ah $ah;
+}
+
+global proc showReparoUI()
+{
+    if (`window -exists reparoWindow`) deleteUI reparoWindow;
+    window -title "Reparo Plugin UI" -widthHeight 350 350 reparoWindow;
+        columnLayout -adjustableColumn true -rowSpacing 5;
+            frameLayout -label "Random Transform (Scatter)" -collapsable true;
+                columnLayout -adjustableColumn true -rowSpacing 3;
+                    intFieldGrp   -label "Simulate Frames"   -numberOfFields 1 -value1 120  simFramesField;
+                    floatFieldGrp -label "Initial Offset"    -numberOfFields 1 -value1 1.5  offsetField;
+                    floatFieldGrp -label "Velocity X"        -numberOfFields 1 -value1 0.2  vxField;
+                    floatFieldGrp -label "Velocity Y"        -numberOfFields 1 -value1 0.1  vyField;
+                    floatFieldGrp -label "Velocity Z"        -numberOfFields 1 -value1 0.2  vzField;
+                    floatFieldGrp -label "Gravity Magnitude" -numberOfFields 1 -value1 15.8 gravField;
+                    button -label "Scatter" -height 30 -command "reparoDoScatter";
+                setParent ..;
+            setParent ..;
+            separator -style "in";
+            frameLayout -label "Repair Transform (Rebuild)" -collapsable true;
+                columnLayout -adjustableColumn true -rowSpacing 3;
+                    intFieldGrp   -label "Rebuild Frames" -numberOfFields 1 -value1 200   framesField;
+                    floatFieldGrp -label "Rotation Angle" -numberOfFields 1 -value1 720.0 angleField;
+                    floatFieldGrp -label "Arc Height"     -numberOfFields 1 -value1 15.0  arcField;
+                    button -label "Repair" -height 30 -command "reparoDoRepair";
+                setParent ..;
+            setParent ..;
+    showWindow reparoWindow;
+}
+
+
+global proc ScatterMel(int $simFrames, float $offsetAmount,
+                          float $velX, float $velY, float $velZ,
+                          float $gravity)
+{
+    string $objs[] = `ls -selection -type transform -long`;  
+    if (size($objs) == 0) { warning "No meshes selected"; return; }
+
+    // Collision ground + gravity field
+    string $ground[] = `polyPlane -w 500 -h 500 -name "collision_plane"`;
+    rigidBody -passive -position 0 0 0 -name "ground_RB" $ground[0];
+    string $gravityField[] = `gravity -magnitude $gravity -dx 0 -dy -1 -dz 0 -name "scatter_gravity"`;
+
+    // Set each object up as an active rigid body with random spin + jitter
+    for ($obj in $objs) {
+        cutKey -clear $obj;
+
+        float $ox = 0.0;
+        float $oy = 0.0;
+        float $oz = 0.0;
+        if ($offsetAmount > 0.001) {
+            $ox = rand(-$offsetAmount, $offsetAmount);
+            $oy = 0.5 + rand(0, $offsetAmount);          // lift slightly upward
+            $oz = rand(-$offsetAmount, $offsetAmount);
+        }
+        move -relative $ox $oy $oz $obj;
+
+        float $spinX = rand(-2.0, 2.0);
+        float $spinY = rand(-2.0, 2.0);
+        float $spinZ = rand(-2.0, 2.0);
+
+        rigidBody -active
+                  -initialVelocity $velX $velY $velZ
+                  -initialAngularVelocity $spinX $spinY $spinZ $obj;
+        connectDynamic -f $gravityField[0] $obj;
+    }
+
+    // Run the simulation
+    currentTime 1;
+    int $f;
+    for ($f = 2; $f <= $simFrames; $f++)
+        currentTime -update true -edit $f;
+
+    // Read the settled pose at the final frame
+    float $tx[], $ty[], $tz[], $rx[], $ry[], $rz[];
+    int $i = 0;
+    for ($obj in $objs) {
+        $tx[$i] = `getAttr ($obj + ".tx")`;
+        $ty[$i] = `getAttr ($obj + ".ty")`;
+        $tz[$i] = `getAttr ($obj + ".tz")`;
+        $rx[$i] = `getAttr ($obj + ".rx")`;
+        $ry[$i] = `getAttr ($obj + ".ry")`;
+        $rz[$i] = `getAttr ($obj + ".rz")`;
+        $i++;
+    }
+
+    // Tear down dynamics
+    string $allRB[] = `ls -type "rigidBody"`;
+    if (size($allRB) > 0) delete $allRB;
+    if (`objExists "scatter_gravity"`) delete "scatter_gravity";
+    if (`objExists "collision_plane"`) delete "collision_plane";
+
+    // Bake the settled pose onto frame 1
+    playbackOptions -min 1 -max $simFrames;
+    currentTime 1;
+    $i = 0;
+    for ($obj in $objs) {
+        setKeyframe -t 1 -v $tx[$i] -at "tx" $obj;
+        setKeyframe -t 1 -v $ty[$i] -at "ty" $obj;
+        setKeyframe -t 1 -v $tz[$i] -at "tz" $obj;
+        setKeyframe -t 1 -v $rx[$i] -at "rx" $obj;
+        setKeyframe -t 1 -v $ry[$i] -at "ry" $obj;
+        setKeyframe -t 1 -v $rz[$i] -at "rz" $obj;
+        $i++;
+    }
+}
+
+global proc RepairMel(string $obj, float $origX, float $origY, float $origZ, float $origRx, float $origRy, float $origRz, int $startFrame, int $endFrame, float $arcHeight, float $rotAngle)
+{
+    float $cx = `getAttr ($obj + ".tx")`;
+    float $cy = `getAttr ($obj + ".ty")`;
+    float $cz = `getAttr ($obj + ".tz")`;
+    float $crx = `getAttr ($obj + ".rx")`;
+    float $cry = `getAttr ($obj + ".ry")`;
+    float $crz = `getAttr ($obj + ".rz")`;
+
+    // Bake current pose to Frame 1
+    setKeyframe -t 1 -v $cx -at "tx" $obj;
+    setKeyframe -t 1 -v $cy -at "ty" $obj;
+    setKeyframe -t 1 -v $cz -at "tz" $obj;
+    setKeyframe -t 1 -v $crx -at "rx" $obj;
+    setKeyframe -t 1 -v $cry -at "ry" $obj;
+    setKeyframe -t 1 -v $crz -at "rz" $obj;
+
+    // Clear keyframes explicitly after 1
+    cutKey -time "2:" -cl $obj;
+
+    int $f;
+    int $den = $endFrame - $startFrame; // total number of frames
+    if ($den < 1) $den = 1;
+    float $u;
+    
+    for ($f = $startFrame; $f <= $endFrame; $f++) {
+        $u = float($f - $startFrame) / $den;  // frame progress [0,1]
+        float $yArc = sin($u * 3.14159) * $arcHeight;
+
+        // lerp
+        float $lx = $cx * (1.0 - $u) + $origX * $u;
+        float $ly = $cy * (1.0 - $u) + $origY * $u + $yArc;
+        float $lz = $cz * (1.0 - $u) + $origZ * $u;
+
+        // float $angleDeg = $u * $rotAngle;
+        float $angleDeg = 0;
+
+        float $rotX = $crx * (1.0 - $u) + $origRx * $u;
+        float $rotY = $cry * (1.0 - $u) + $origRy * $u + $angleDeg;
+        float $rotZ = $crz * (1.0 - $u) + $origRz * $u;
+
+        setKeyframe -t $f -v $lx -at "tx" $obj;
+        setKeyframe -t $f -v $ly -at "ty" $obj;
+        setKeyframe -t $f -v $lz -at "tz" $obj;
+        setKeyframe -t $f -v $rotX -at "rx" $obj;
+        setKeyframe -t $f -v $rotY -at "ry" $obj;
+        setKeyframe -t $f -v $rotZ -at "rz" $obj;
+    }
+
+    // Ensure final state exactly matches original
+    setKeyframe -t $endFrame -v $origX -at "tx" $obj;
+    setKeyframe -t $endFrame -v $origY -at "ty" $obj;
+    setKeyframe -t $endFrame -v $origZ -at "tz" $obj;
+    setKeyframe -t $endFrame -v $origRx -at "rx" $obj;
+    setKeyframe -t $endFrame -v $origRy -at "ry" $obj;
+    setKeyframe -t $endFrame -v $origRz -at "rz" $obj;
+}
