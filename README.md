@@ -1,5 +1,7 @@
 A Maya plugin to procedurally create a repair animation for selected objects in the scene. It provides a scatter command which can be used to distrubute multiple objects around the scene using rigidbody and forces. 
 
+![screenshot](teaser.png)
+
 To use:
 - Download the files in the plugin folder
 - In Maya, go to Windows > Settings/Preferences > Plug-in Manager
